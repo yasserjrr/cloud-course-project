@@ -1,0 +1,27 @@
+version: 0.2
+
+env:
+  variables:
+    STACK_NAME: "cloud-course-stack"
+    AWS_REGION: "eu-west-1"
+
+phases:
+  install:
+    commands:
+      - pip3 install aws-sam-cli
+  pre_build:
+    commands:
+      - cd backend
+      - sam --version
+  build:
+    commands:
+      - sam build
+  post_build:
+    commands:
+      - sam deploy
+        --stack-name $STACK_NAME
+        --region $AWS_REGION
+        --capabilities CAPABILITY_IAM
+        --no-fail-on-empty-changeset
+        --resolve-s3
+        --parameter-overrides ProjectName=cloud-course AdminEmail=$ADMIN_EMAIL
