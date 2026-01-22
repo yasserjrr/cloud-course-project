@@ -10,12 +10,14 @@ phases:
   install:
     commands:
       - pip3 install aws-sam-cli
+      - set -euo pipefail
+      
   pre_build:
     commands:
       - sam --version
   build:
     commands:
-      - sam build
+      - sam build --use-container
   post_build:
     commands:
       - sam deploy
