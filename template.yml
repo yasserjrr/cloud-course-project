@@ -1,0 +1,134 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless ecommerce demo with SQS + DLQ + monitoring
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 128
+    Tracing: Active
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: cloud-course
+
+  AdminEmail:
+    Type: String
+    Description: Email to receive DLQ alerts
+
+Resources:
+  # ---------- API ----------
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "${ProjectName}-api"
+      StageName: prod
+      TracingEnabled: true
+      Cors:
+        AllowMethods: "'OPTIONS,POST'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+
+  # ---------- DynamoDB ----------
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-orders"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+
+  # ---------- SQS ----------
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-dlq"
+
+  MainQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-main-queue"
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  # ---------- Lambda: Ingest ----------
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-ingest"
+      CodeUri: src/ingest/
+      Handler: app.handler
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt MainQueue.QueueName
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref MainQueue
+      Events:
+        PlaceOrder:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /order
+            Method: POST
+
+  # ---------- Lambda: Worker ----------
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-worker"
+      CodeUri: src/worker/
+      Handler: app.handler
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref OrdersTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref OrdersTable
+      Events:
+        FromQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt MainQueue.Arn
+            BatchSize: 5
+
+  # ---------- SNS + Alarm ----------
+  DlqAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-dlq-alerts"
+
+  DlqAlertsEmail:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref DlqAlertsTopic
+      Protocol: email
+      Endpoint: !Ref AdminEmail
+
+  DlqMessagesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-dlq-visible-messages"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeadLetterQueue.QueueName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref DlqAlertsTopic
+
+Outputs:
+  ApiEndpoint:
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod/order"
