@@ -4,6 +4,7 @@ env:
   variables:
     STACK_NAME: "cloud-course-stack"
     AWS_REGION: "eu-west-1"
+    ADMIN_EMAIL: mohamadyasser0801@gmail.com
 
 phases:
   install:
